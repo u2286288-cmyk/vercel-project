@@ -1,17 +1,14 @@
 {
-  "name": "sven-vercel",
+  "name": "market-atlas",
+  "version": "3.2.0",
   "private": true,
-  "version": "1.0.0",
-  "description": "Express bridge that issues a short-lived RSA token and returns a public text file.",
+  "description": "CoinGecko market dashboard",
   "engines": {
-    "node": "26.x"
+    "node": ">=22.9"
   },
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "test": "node --test"
-  },
-  "dependencies": {
-    "express": "^4.21.2"
+    "start": "node --env-file-if-exists=.env scripts/local.cjs",
+    "dev": "node --env-file-if-exists=.env --watch scripts/local.cjs",
+    "test": "node --test test/*.test.js"
   }
 }

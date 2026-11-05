@@ -1,121 +1,118 @@
-# Sven Vercel bridge
+# Market Atlas
 
-Express service for Bigcoin Group. Deploy **this directory** (`sven-vercel/`) on Vercel. The rest of the repository is a separate site; leave the Vercel project root set to `sven-vercel` so that site is not built as this app.
+## Local development
 
-Node.js 26. Two routes:
+Use Node.js 22.9 or newer. Copy `.env.example` to `.env`, add your CoinGecko Demo key, then run:
 
-| Method and path | Response |
+    npm start
+
+No third-party packages are required. Open the exact URL printed in the terminal. A free port is selected automatically; set `LOCAL_PORT=5173` in `.env` if you want a fixed local port. Use `npm run dev` for backend watch mode.
+
+## Vercel deployment
+
+Extract this ZIP into a clean folder. Do not merge it with an older release that contains `api/index.js`. The old catch-all function has been removed.
+
+Import the project into Vercel with the root directory containing `vercel.json`, `api/`, and `public/`. Choose Framework Preset **Other**. The checked-in configuration sets no build command and sets Output Directory to **public**; remove conflicting dashboard overrides. Add `COINGECKO_DEMO_API_KEY` in Vercel's environment variables for the deployment environment, then deploy/redeploy.
+
+Do not set the build command to `npm start`. The local server is development-only and is not deployed. Vercel functions do not call `listen()` or need a port.
+
+| URL | Implementation |
 | --- | --- |
-| `GET /bridge` | A readable Node.js script (`text/plain`) |
-| `GET /data` | `public/message.txt` as `text/plain`, after the token checks pass |
+| `/` and static assets | `public/`, served directly by Vercel |
+| `/api/markets` | `api/markets.js`, independent Node function |
+| `/api/token` | `api/token.js`, independent Node function |
+| `/token` | Rewrite to `/api/token` |
+| `/output` | Rewrite to independent `api/output.js` |
+| `/api/output` | Authenticated access to `data/output.json` |
 
-`GET /` lists those paths. `public/message.txt` is not a public download: this server answers `/message.txt` with 404, and `vercel.json` redirects that path to `/data` so Vercel does not serve the file from `public/` as a static asset.
+## Output access and one-second expiry
 
-## What `/bridge` returns
+1. Put your valid JSON data in `data/output.json`, outside `public/`.
+   Remove any old `public/output.json` before deploying: static files bypass function authentication.
+   No output data was supplied, so this release includes no output.json.
+2. Generate a random secret with:
 
-The script is the client for `/data`. It embeds:
+       node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
-- the RSA public key
-- the shared password
-- the client IP of the `/bridge` request (`x-forwarded-for` first hop, otherwise `req.ip`)
-- the absolute URL of `/data` on this host
+   Set it as `OUTPUT_ACCESS_PASSWORD` in your local .env and Vercel environment.
+   This is now purely the server-side encryption key for the `/output` grant —
+   `/token` no longer checks it against anything the caller sends, so it never
+   needs to be shared with any client.
+3. Send GET `/token?purpose=output` (no credential required).
+   A successful response contains Bitcoin and Ethereum prices (`bitcoin.price`,
+   `ethereum.price`, USD), plus `val`, `issuedAt`, `expiresAt`,
+   and `expiresInMs: 1000` in the same JSON object.
+   A fresh grant is created after the price lookup, including when prices
+   came from the cache.
+   If prices are unavailable, the response is 503 and contains no grant.
+   Verified stale prices retain their `mode: stale` label.
+   Plain `/token` with neither an `Authorization` header nor `?purpose=output`
+   remains prices-only, with no grant issued.
+4. Immediately send GET `/output` with header `Authorization: Bearer <val>`.
+   Use `/output?format=text` for the original JSON file as text/plain, or
+   `/output?format=json` (the default) for application/json.
+   Tokens are not accepted in URL query parameters.
+   Anyone can now request a `val` grant from `/token`; what still limits
+   access to `/output` is the grant's 1-second lifetime and its binding to
+   the requesting IP — not a shared secret.
 
-When you run it with `node`, at call time it:
+The token encrypts and authenticates a millisecond timestamp, random nonce, and
+client IP using AES-256-GCM. The timestamp is captured after prices are ready,
+just before the response is serialized. Requests more than 1,000 ms later are rejected with HTTP 401;
+exactly 1,000 ms is accepted. An IP mismatch returns HTTP 403. Missing/invalid
+credentials return 401, and a missing server secret returns 503.
 
-1. Builds JSON `{ ip, password, timestamp }` with `timestamp` set to `Date.now()` in milliseconds.
-2. Encrypts that JSON with RSA-OAEP and SHA-256 using the embedded public key.
-3. Calls `GET /data` with `Authorization: Bearer <base64 ciphertext>`.
-4. Prints the response body. That is the file text, or a short rejection.
+Every client follows the same rules regardless of browser or User-Agent.
+Only formatting changes between JSON and text; the data is the same.
+The endpoint reads and validates JSON only; it never executes file contents.
 
-The script is plain source. It does not obfuscate anything, eval remote code, or call any URL other than this app's `/data`.
+The encrypted token carries the timestamp, so expiry works across separate
+Vercel instances without an in-memory timestamp map. Each issued token has its
+own lifetime; issuing another token does not revoke earlier tokens. This is
+expiry validation, not single-use enforcement: a token can be reused from the
+same IP within its one-second lifetime. Multiple clients behind the same public
+IP cannot be distinguished by IP alone.
 
-## What `/data` checks
+On Vercel, the implementation uses the platform's
+[`x-vercel-forwarded-for` header](https://vercel.com/docs/headers/request-headers#x-vercel-forwarded-for).
+Locally it uses the socket IP and ignores forwarded headers.
+Network latency and cold starts may exceed this strict one-second window;
+the client must then request a new access token. No automatic grace period is added.
 
-The server RSA-decrypts the bearer token, then:
+Authenticated requests return 404 if the data file is absent, or 500 if it is
+invalid JSON. GET and HEAD are supported on output; other methods return 405.
+Redeploy after changing the data file or secret.
 
-1. The password inside the payload must match the server password. A mismatch is `401` `bad token`.
-2. The IP inside the payload must equal this request's client IP, using the same extraction as `/bridge`. A mismatch is `401` `wrong ip`.
-3. `Date.now() - timestamp` must be `<= MAX_TOKEN_AGE_MS` (default **500**). A token older than that, or timestamped more than 100ms in the future, is `401` `expired`.
+### Node client
 
-Anything that does not decrypt or is not the expected JSON is `401` `bad token`. Failures are plaintext and omit the password, the private key, and the file.
+Set `API_BASE_URL` in .env to the exact local URL printed by `npm start`
+or your HTTPS Vercel domain. `OUTPUT_ACCESS_PASSWORD` is server-side only now
+and this client does not need it. Keep the local server running, then run in
+a second terminal:
 
-RSA-OAEP encrypts one block. A 2048-bit key with SHA-256 holds about 190 bytes of JSON. The sample password and a normal IP fit. Keep `AUTH_PASSWORD` short enough that `{ ip, password, timestamp }` stays inside that limit, or generate a larger keypair for Vercel.
+    node --env-file=.env call-output.cjs
 
-## 500ms is a tight bound
+The included client calls `/token?purpose=output` (no credential), immediately
+passes `val` to `/output?format=text`, and prints the prices and returned data.
+It does not execute downloaded content. Network latency and cold starts can
+still make the one-second grant expire.
 
-Half a second is enough for a local request. A real HTTPS round trip, DNS, and a Vercel cold start can take longer than 500ms, so a freshly generated token can arrive already expired. The default stays 500. Set `MAX_TOKEN_AGE_MS` on Vercel to a larger integer (milliseconds) if live calls are rejected with `expired`.
+Shared provider utilities live in `lib/`, outside the public folder and API entrypoints. Only the local router in `scripts/` combines routes for local development.
 
-## Run locally
+## Real data and failure handling
 
-From this directory:
+The markets function requests 50 assets with names, logos, prices and seven-day chart history. The token function independently requests Bitcoin and Ethereum USD prices using CoinGecko's lightweight price endpoint. Successful token GET requests log both prices to the Node console (Vercel function logs when deployed).
 
-```bash
-npm install
-npm start
-```
+Each upstream attempt has an 8-second timeout, with at most one retry for transient failures. Authorization failures and rate limits are not immediately retried. Both functions have a configured 30-second maximum duration; the browser waits up to 25 seconds.
 
-`npm run dev` is the same server with `node --watch`. `npm start` listens on port 3000, or `PORT` if you set it.
+Market responses are cached for 45 seconds, token responses for 15 seconds. Requests share an in-flight fetch within the same instance. After failure, verified cached prices can be returned for at most 15 minutes, labeled `mode: stale`. A cold instance with no cached data returns HTTP 503 with an explicit error and Retry-After header, never fabricated prices. These caches are per warm function instance, not persistent or shared across instances. CoinGecko outages and plan limits can still make data unavailable.
 
-Local dev does not need secrets. When `RSA_PRIVATE_KEY`, `RSA_PUBLIC_KEY`, and `AUTH_PASSWORD` are unset, the process generates an ephemeral RSA keypair at startup and uses the password `local-dev-password`. The `/bridge` script embeds that public key and password. The private key stays in memory and is not written to disk. A new process gets a new keypair, so a script from an older process will not decrypt.
+The browser preserves recent verified data on refresh failures and marks it delayed. Charts support price hints by hovering, tapping, or using keyboard arrow keys.
 
-Those defaults are for local dev. On Vercel, or when `NODE_ENV=production`, `GET /` still responds. `GET /bridge` and `GET /data` return `500` until `RSA_PUBLIC_KEY`, `RSA_PRIVATE_KEY`, and `AUTH_PASSWORD` are set. `npm start` in production still exits at startup until those three are set.
+Keep the API key server-side in the environment, never in frontend code. Rotate any key previously shared publicly.
 
-### Walkthrough
+## Verification
 
-In another shell, against a server you just started:
+    npm test
 
-```bash
-curl -sS http://127.0.0.1:3000/bridge -o bridge.js
-node bridge.js
-```
-
-You should see:
-
-```text
-Hello from Bigcoin Group.
-```
-
-If the second command prints `expired`, the round trip took longer than 500ms. Restart the server with a looser window and fetch a new script:
-
-```bash
-MAX_TOKEN_AGE_MS=5000 npm start
-```
-
-`vercel dev` from this directory also runs the exported Express app. Use `npm start` when you only want the local Node server.
-
-## Deploy on Vercel
-
-Do not deploy the repository root. In the Vercel project, set **Root Directory** to `sven-vercel`. The framework preset can be Express or Other. Node.js version is 26 (`engines.node`).
-
-`server.js` exports the Express app for the current Vercel Express runtime (`@vercel/node` / zero-config Express). `vercel.json` includes `public/message.txt` in the function bundle and redirects `/message.txt` to `/data`.
-
-Set these environment variables on the Vercel project (Production and Preview). Do not commit the private key.
-
-| Name | Purpose |
-| --- | --- |
-| `RSA_PRIVATE_KEY` | PKCS#8 PEM private key. Decrypts the bearer token. Env only. |
-| `RSA_PUBLIC_KEY` | SPKI PEM public key paired with that private key. Embedded in `/bridge`. |
-| `AUTH_PASSWORD` | Shared password placed inside the encrypted payload. |
-| `MAX_TOKEN_AGE_MS` | Optional. Positive integer. Default `500`. |
-
-Generate a keypair locally and copy the PEM blocks into Vercel. You can paste real line breaks, or one line with `\n` escapes. The app accepts either.
-
-```bash
-node -e 'const crypto=require("crypto"); const k=crypto.generateKeyPairSync("rsa",{modulusLength:2048,publicKeyEncoding:{type:"spki",format:"pem"},privateKeyEncoding:{type:"pkcs8",format:"pem"}}); process.stdout.write("RSA_PUBLIC_KEY\n"+k.publicKey+"\nRSA_PRIVATE_KEY\n"+k.privateKey);'
-```
-
-Use the same pair for both vars. An ephemeral keypair cannot be shared across Vercel instances, so production always reads the keys from the environment.
-
-## Tests
-
-```bash
-npm test
-```
-
-The `node:test` suite talks to the app on localhost and checks:
-
-- a token whose IP does not match the request is `401` `wrong ip`
-- a token older than 500ms is `401` `expired`
-- a token signed with the right IP, password, and a timestamp inside 500ms returns `public/message.txt`
-
-Those cases mint the timestamp directly, so they do not sleep and do not depend on a wide-area round trip.
+Tests use mocked provider responses and local HTTP requests. They cover separate function exports, Vercel configuration, route aliases, market/token responses, retry/failure handling, stale-data behavior and chart helpers. They do not prove a live CoinGecko connection or a successful Vercel deployment.
