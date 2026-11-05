@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "server.js": {
+      "includeFiles": "public/message.txt"
+    }
+  },
+  "redirects": [
+    {
+      "source": "/message.txt",
+      "destination": "/data",
+      "permanent": false
+    }
+  ]
+}
