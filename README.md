@@ -2,7 +2,7 @@
 
 Express service for Bigcoin Group. Deploy **this directory** (`sven-vercel/`) on Vercel. The rest of the repository is a separate site; leave the Vercel project root set to `sven-vercel` so that site is not built as this app.
 
-Node.js 20. Two routes:
+Node.js 26. Two routes:
 
 | Method and path | Response |
 | --- | --- |
@@ -58,7 +58,7 @@ npm start
 
 Local dev does not need secrets. When `RSA_PRIVATE_KEY`, `RSA_PUBLIC_KEY`, and `AUTH_PASSWORD` are unset, the process generates an ephemeral RSA keypair at startup and uses the password `local-dev-password`. The `/bridge` script embeds that public key and password. The private key stays in memory and is not written to disk. A new process gets a new keypair, so a script from an older process will not decrypt.
 
-Those defaults are for local dev. Production (`NODE_ENV=production` or Vercel) refuses to start until the three env vars are set.
+Those defaults are for local dev. On Vercel, or when `NODE_ENV=production`, `GET /` still responds. `GET /bridge` and `GET /data` return `500` until `RSA_PUBLIC_KEY`, `RSA_PRIVATE_KEY`, and `AUTH_PASSWORD` are set. `npm start` in production still exits at startup until those three are set.
 
 ### Walkthrough
 
@@ -85,7 +85,7 @@ MAX_TOKEN_AGE_MS=5000 npm start
 
 ## Deploy on Vercel
 
-Do not deploy the repository root. In the Vercel project, set **Root Directory** to `sven-vercel`. The framework preset can be Express or Other. Node.js version is 20 (`engines.node`).
+Do not deploy the repository root. In the Vercel project, set **Root Directory** to `sven-vercel`. The framework preset can be Express or Other. Node.js version is 26 (`engines.node`).
 
 `server.js` exports the Express app for the current Vercel Express runtime (`@vercel/node` / zero-config Express). `vercel.json` includes `public/message.txt` in the function bundle and redirects `/message.txt` to `/data`.
 

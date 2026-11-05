@@ -226,6 +226,61 @@ test("wrong password, future timestamp, and age boundaries", () => {
   assert.equal(checkAge(-config.clockSkewMs).ok, true);
 });
 
+test("vercel without secrets serves / and names the missing keys", () => {
+  const script = `
+    "use strict";
+    process.env.VERCEL = "1";
+    delete process.env.AUTH_PASSWORD;
+    delete process.env.RSA_PUBLIC_KEY;
+    delete process.env.RSA_PRIVATE_KEY;
+    delete process.env.MAX_TOKEN_AGE_MS;
+    delete process.env.NODE_ENV;
+    const http = require("http");
+    const app = require("./server");
+    const server = http.createServer(app);
+    server.listen(0, "127.0.0.1", () => {
+      const port = server.address().port;
+      function get(path) {
+        return new Promise((resolve, reject) => {
+          const req = http.get({ hostname: "127.0.0.1", port, path }, (res) => {
+            const chunks = [];
+            res.on("data", (chunk) => chunks.push(chunk));
+            res.on("end", () => {
+              resolve({
+                status: res.statusCode,
+                body: Buffer.concat(chunks).toString("utf8"),
+              });
+            });
+          });
+          req.on("error", reject);
+        });
+      }
+      Promise.all([get("/"), get("/bridge"), get("/data")])
+        .then((results) => {
+          process.stdout.write(JSON.stringify(results));
+          server.close();
+        })
+        .catch((err) => {
+          console.error(err);
+          process.exitCode = 1;
+          server.close();
+        });
+    });
+  `;
+  const result = spawnSync(process.execPath, ["-e", script], {
+    cwd: path.join(__dirname, ".."),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const [root, bridge, data] = JSON.parse(result.stdout);
+  assert.equal(root.status, 200);
+  assert.match(root.body, /Bigcoin Group bridge/);
+  assert.equal(bridge.status, 500);
+  assert.match(bridge.body, /RSA_PUBLIC_KEY and RSA_PRIVATE_KEY are required/);
+  assert.equal(data.status, 500);
+  assert.match(data.body, /RSA_PUBLIC_KEY and RSA_PRIVATE_KEY are required/);
+});
+
 test("message.txt is not served without the data endpoint", async () => {
   const server = await listen();
   try {

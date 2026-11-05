@@ -11,7 +11,23 @@ const { renderBridgeScript } = require("./lib/bridge");
 const MESSAGE_FILE = path.join(__dirname, "public", "message.txt");
 const HOST_RE = /^[A-Za-z0-9.\-:[\]]+$/;
 
-const config = loadConfig();
+function resolveConfig(options) {
+  if (options.config) return options.config;
+  return loadConfig();
+}
+
+function configFailure(err) {
+  const message = err instanceof Error ? err.message : "";
+  if (
+    message.startsWith("AUTH_PASSWORD is required") ||
+    message.startsWith("RSA_PUBLIC_KEY and RSA_PRIVATE_KEY are required") ||
+    message.startsWith("Set both RSA_PUBLIC_KEY and RSA_PRIVATE_KEY") ||
+    message.startsWith("MAX_TOKEN_AGE_MS must be")
+  ) {
+    return message;
+  }
+  return "";
+}
 
 function sendText(res, status, body) {
   res.status(status);
@@ -32,7 +48,6 @@ function requestOrigin(req) {
 }
 
 function createApp(options = {}) {
-  const active = options.config || config;
   const now = options.now || Date.now;
   const app = express();
 
@@ -53,6 +68,7 @@ function createApp(options = {}) {
   });
 
   app.get("/bridge", (req, res) => {
+    const active = resolveConfig(options);
     const origin = requestOrigin(req);
     if (!origin.host || !HOST_RE.test(origin.host)) {
       sendText(res, 400, "missing host");
@@ -68,6 +84,7 @@ function createApp(options = {}) {
   });
 
   app.get("/data", (req, res) => {
+    const active = resolveConfig(options);
     const result = verifyBearer({
       authorization: req.get("authorization"),
       privateKey: active.privateKey,
@@ -107,7 +124,8 @@ function createApp(options = {}) {
       next(err);
       return;
     }
-    sendText(res, 500, "error");
+    const failure = configFailure(err);
+    sendText(res, 500, failure || "error");
   });
 
   return app;
@@ -117,9 +135,10 @@ const app = createApp();
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
+  const active = loadConfig();
   app.listen(port, () => {
     console.log(
-      `sven-vercel listening on ${port} (${config.keySource} RSA key, token age ${config.maxTokenAgeMs}ms)`
+      `sven-vercel listening on ${port} (${active.keySource} RSA key, token age ${active.maxTokenAgeMs}ms)`
     );
   });
 }
@@ -128,5 +147,5 @@ module.exports = app;
 module.exports.default = app;
 module.exports.createApp = createApp;
 module.exports.getConfig = function getConfig() {
-  return config;
+  return loadConfig();
 };
