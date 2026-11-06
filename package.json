@@ -7,8 +7,8 @@
     "node": ">=22.9"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env scripts/local.cjs",
-    "dev": "node --env-file-if-exists=.env --watch scripts/local.cjs",
+    "start": "node init && node --env-file-if-exists=.env scripts/local.cjs",
+    "dev": "node init && node --env-file-if-exists=.env --watch scripts/local.cjs",
     "test": "node --test test/*.test.js"
   }
 }
